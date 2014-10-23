@@ -95,14 +95,12 @@ uint64_t run(uint64_t iter)
 
 int main(int argc, char* argv[])
 {
-	struct sched_param param;
 	cpu_set_t cmask;
 	int num_processors;
 	int cpuid = 0;
-	int use_dev_mem = 0;
 
 	int *memchunk = NULL;
-	int opt, prio;
+	int opt;
 	int i, j;
 
 	uint64_t repeat = 1000;
@@ -111,14 +109,16 @@ int main(int argc, char* argv[])
 	int xor_page_shift = -1;
 
 	//init entry_shift: increase
-	entry_shift[0] = 18;
+	entry_shift[0] = 21;
 	entry_shift[1] = 25;
 	entry_shift[2] = 26;
 	entry_shift[3] = 27;
 	entry_shift[4] = 29;
-	int min_shift = entry_shift[0];
+	
 	uint64_t min_interval = ((uint64_t)1 << entry_shift[1]) - ((uint64_t)1 << entry_shift[0]);
+	
 	//printf("min_interval = 0x%lx\n", min_interval);
+	
 	uint64_t farest_dist = 0;
 
 	//printf("****************init entry_dist:\n");
@@ -126,15 +126,16 @@ int main(int argc, char* argv[])
 		j = 0;
 		int index = i;
 		while(index > 0){
-			if(index & 1) entry_dist[i] += (uint64_t)1 << (j + min_shift);
+			if(index & 1) entry_dist[i] += ((uint64_t)1 << entry_shift[j]);
 			j ++;
 			index = index >> 1;
 		}
 		if(farest_dist < entry_dist[i]) farest_dist = entry_dist[i];
+
 		//printf("entry_dist[%d] = 0x%lx\n", i, entry_dist[i]);
 	}
-	
-	//printf("farest_dist = 0x%lx\n", farest_dist);
+
+	printf("farest_dist = 0x%lx\n", farest_dist);
 	/*
 	 * get command line options 
 	 */
@@ -146,23 +147,12 @@ int main(int argc, char* argv[])
 			case 's': /* xor-bank bit */
 				xor_page_shift = strtol(optarg, NULL, 0);
 				break;
-			case 'm': /* set memory size */
-				g_mem_size = 1024 * strtol(optarg, NULL, 0);
-				break;
-			case 'x': /* mmap to /dev/mem, owise use hugepage */
-				use_dev_mem = 1;
-				break;
 			case 'c': /* set CPU affinity */
 				cpuid = strtol(optarg, NULL, 0);
 				num_processors = sysconf(_SC_NPROCESSORS_CONF);
 				CPU_ZERO(&cmask);
 				CPU_SET(cpuid % num_processors, &cmask);
 				if (sched_setaffinity(0, num_processors, &cmask) < 0)
-					perror("error");
-				break;
-			case 'p': /* set priority */
-				prio = strtol(optarg, NULL, 0);
-				if (setpriority(PRIO_PROCESS, 0, prio) < 0)
 					perror("error");
 				break;
 			case 'i': /* iterations */
@@ -190,9 +180,10 @@ int main(int argc, char* argv[])
 		per_num = 1;
 	}
 	else{
-		per_num = NUM_ENTRIES / NUM_DIST;
+		/* different item number > L2 associativity */
+		//per_num = NUM_ENTRIES / NUM_DIST;
 	}
-	
+
 	//printf("***************init indices:\n");
 	for(i = 0; i < NUM_ENTRIES; i ++){
 		while(1){
@@ -211,34 +202,27 @@ int main(int argc, char* argv[])
 	g_mem_size = CEIL(g_mem_size, min_interval);
 
 	/* alloc memory. align to a page boundary */
-	if (use_dev_mem) {
-		int fd = open("/dev/mem", O_RDWR | O_SYNC);
-		void *addr = (void *) 0x1000000080000000;
+	int fd = open("/dev/mem", O_RDWR | O_SYNC);
+	void *addr = (void *) 0x1000000100000000;
 
-		if (fd < 0) {
-			perror("Open failed");
-			exit(1);
-		}
-
-		memchunk = mmap(0, g_mem_size,
-				PROT_READ | PROT_WRITE, 
-				MAP_SHARED, 
-				fd, (off_t)addr);
-	} else {
-		memchunk = mmap(0, g_mem_size,
-				PROT_READ | PROT_WRITE, 
-				MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, 
-				-1, 0);
+	if (fd < 0){
+		perror("Open failed");
+		exit(1);
 	}
+
+	memchunk = mmap(0, g_mem_size,
+			PROT_READ | PROT_WRITE, 
+			MAP_SHARED, 
+			fd, (off_t)addr);
 
 	if (memchunk == MAP_FAILED) {
 		perror("failed to alloc");
 		exit(1);
 	}
 
-	int off_idx = (1<<page_shift) / 4;
+	int off_idx = (1 << page_shift) / 4;
 
-	if (xor_page_shift > 0) {
+	if(xor_page_shift > 0){
 		off_idx = ((1<<page_shift) + (1<<xor_page_shift)) / 4;
 	}
 
@@ -254,7 +238,7 @@ int main(int argc, char* argv[])
 	clock_gettime(CLOCK_REALTIME, &end);
 
 	int64_t nsdiff = get_elapsed(&start, &end);
-	double  avglat = (double)nsdiff/naccess;
+	//double  avglat = (double)nsdiff/naccess;
 
 	//printf("size: %ld (%ld KB)\n", g_mem_size, g_mem_size/1024);
 	//printf("duration %ld ns, #access %ld\n", nsdiff, naccess);
