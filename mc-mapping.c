@@ -39,7 +39,7 @@ static uint64_t entry_shift[ENTRY_SHIFT_CNT];
 static uint64_t entry_dist[NUM_DIST] = {0};
 static uint64_t g_mem_size = 0;
 
-
+//#define TST 1
 
 /* bank data */
 static int* list;
@@ -63,33 +63,39 @@ uint64_t get_elapsed(struct timespec *start, struct timespec *end)
 	return dur;
 
 }
+#define SEED (uint64_t)0x49720718
 
-uint64_t run(uint64_t iter)
+void run(uint64_t iter)
 {
-	uint64_t i, j = 0;
-	uint64_t cnt = 0;
-	int data;
+	uint64_t i, j = 0, tmp;
+	int data, global_id, base, in_id, random_id = 0;
 
-	//printf("*****************access running:\n");
 	for (i = 0; i < iter; i++){
 		//printf("%luth: access list[0x%lx], next time: indices[j=%lu] = 0x%lx\n", i, next, j, indices[j]);
-		data = list[next];
+		data = list[next];	
+		
 		next = indices[j];
-#if 0
-		/* hardware prefetch case */
-		j ++;
-		if(j == NUM_ENTRIES) j = 0;
-#endif
-#if 0
-		/* sequence access && avoid hardware prefetch 
-		* && twice access: because next has been updated!! 
-		*/
-		j = (list[next] + i + j ) % NUM_ENTRIES;
-#endif
-		j = (data + i + j) % NUM_ENTRIES;
-		cnt ++;
+		//printf("next : %luth:indices[%lu] = 0x%lx\n", i + 1, j, next);
+		
+		/* shuffle every 16 item */
+		if(j % L3_NUM_WAYS == 15){
+			global_id = j;
+			base = (global_id / L3_NUM_WAYS) * L3_NUM_WAYS;
+			in_id = 15;
+			while(in_id >= 1){
+				random_id = (SEED * random_id + 1013904223 + data * 3) % in_id + base;
+				
+				tmp = indices[global_id];
+				indices[global_id] = indices[random_id];
+				indices[random_id] = tmp;
+
+				in_id --;
+				global_id --;
+			}
+		}
+
+		j = (j + 1) % NUM_ENTRIES;
 	}
-	return cnt;
 }
 
 
@@ -103,18 +109,18 @@ int main(int argc, char* argv[])
 	int opt;
 	int i, j;
 
-	uint64_t repeat = 1000;
+	uint64_t naccess = 0;
 
-	int page_shift = 0;
-	int xor_page_shift = -1;
+	int bank_bit = -1;
+	int xor_bank_bit = -1;
 
 	//init entry_shift: increase
-	entry_shift[0] = 21;
-	entry_shift[1] = 25;
+	entry_shift[0] = 23;
+	entry_shift[1] = 24;
 	entry_shift[2] = 26;
-	entry_shift[3] = 27;
+	entry_shift[3] = 28;
 	entry_shift[4] = 29;
-	
+	//entry_shift[5] = 30;
 	uint64_t min_interval = ((uint64_t)1 << entry_shift[1]) - ((uint64_t)1 << entry_shift[0]);
 	
 	//printf("min_interval = 0x%lx\n", min_interval);
@@ -142,10 +148,10 @@ int main(int argc, char* argv[])
 	while ((opt = getopt(argc, argv, "a:xb:s:o:m:c:i:l:h")) != -1) {
 		switch (opt) {
 			case 'b': /* bank bit */
-				page_shift = strtol(optarg, NULL, 0);
+				bank_bit = strtol(optarg, NULL, 0);
 				break;
 			case 's': /* xor-bank bit */
-				xor_page_shift = strtol(optarg, NULL, 0);
+				xor_bank_bit = strtol(optarg, NULL, 0);
 				break;
 			case 'c': /* set CPU affinity */
 				cpuid = strtol(optarg, NULL, 0);
@@ -156,32 +162,31 @@ int main(int argc, char* argv[])
 					perror("error");
 				break;
 			case 'i': /* iterations */
-				repeat = (uint64_t)strtol(optarg, NULL, 0);
-				//printf("repeat=%lu\n", repeat);
+				naccess = (uint64_t)strtol(optarg, NULL, 0);
 				break;
 		}
 
 	}
 
-	//printf("xor_page_shift : %d -------------\n", xor_page_shift);
 
-	if(xor_page_shift >= 0)
-		g_mem_size += (1 << page_shift) + (1 << xor_page_shift);
-	else
-		g_mem_size += (1 << page_shift);
+	if(xor_bank_bit >= 0)
+		g_mem_size += (uint64_t)1 << xor_bank_bit;
+
+	if(bank_bit >= 0)
+		g_mem_size += (uint64_t)1 << bank_bit;
+	else{
+		printf("test bank bit < 0\n");
+		exit(1);
+	}
 
 	struct timespec seed;
 	int mask[NUM_DIST] = {0};
-	int ibit = 0, per_num;
+	int ibit = 0;
 
-
-	if(NUM_DIST >= NUM_ENTRIES){
-		/*randomly choose one for a indices[]*/
-		per_num = 1;
-	}
-	else{
-		/* different item number > L2 associativity */
-		//per_num = NUM_ENTRIES / NUM_DIST;
+	
+	if(NUM_DIST < NUM_ENTRIES){
+		printf("need %lu different items!\n", NUM_ENTRIES);
+		exit(1);
 	}
 
 	//printf("***************init indices:\n");
@@ -189,7 +194,7 @@ int main(int argc, char* argv[])
 		while(1){
 			clock_gettime(CLOCK_REALTIME, &seed);
 			ibit = seed.tv_nsec % NUM_DIST;
-			if(mask[ibit] < per_num){
+			if(mask[ibit] == 0){
 				mask[ibit] ++;
 				break;
 			}
@@ -199,6 +204,10 @@ int main(int argc, char* argv[])
 	}
 
 	g_mem_size +=  farest_dist;
+#ifdef TST
+	g_mem_size += (uint64_t)1 << 20;
+#endif
+	
 	g_mem_size = CEIL(g_mem_size, min_interval);
 
 	/* alloc memory. align to a page boundary */
@@ -220,11 +229,17 @@ int main(int argc, char* argv[])
 		exit(1);
 	}
 
-	int off_idx = (1 << page_shift) / 4;
+	int off_idx;
 
-	if(xor_page_shift > 0){
-		off_idx = ((1<<page_shift) + (1<<xor_page_shift)) / 4;
+	if(xor_bank_bit >= 0){
+		off_idx = (((uint64_t)1 << bank_bit) + ((uint64_t)1 << xor_bank_bit)) / 4;
 	}
+	else
+		off_idx = ((uint64_t)1 << bank_bit) / 4;
+
+#ifdef TST
+	off_idx += ((uint64_t)1 << 20) / 4;
+#endif
 
 	list = &memchunk[off_idx];
 
@@ -233,16 +248,13 @@ int main(int argc, char* argv[])
 	clock_gettime(CLOCK_REALTIME, &start);
 
 	/* access banks */
-	uint64_t naccess = run(repeat);
+	run(naccess);
 
 	clock_gettime(CLOCK_REALTIME, &end);
 
-	int64_t nsdiff = get_elapsed(&start, &end);
-	//double  avglat = (double)nsdiff/naccess;
-
-	//printf("size: %ld (%ld KB)\n", g_mem_size, g_mem_size/1024);
-	//printf("duration %ld ns, #access %ld\n", nsdiff, naccess);
-	//printf("average latency: %ld ns\n", nsdiff/naccess);
+	uint64_t nsdiff = get_elapsed(&start, &end);
+	
+	printf("time %.2f s\n", (double)nsdiff / 1000000000.0);
 	printf("bandwidth %.2f MB/s\n", 64.0*1000.0*(double)naccess/(double)nsdiff);
 
 	return 0;

@@ -9,6 +9,7 @@ sleep 1
 echo "Now run the test"
 for b in `seq 0 27`; do	#upper limit : 28 #23
 	echo -n "Bit$b: "
-	./mc-mapping -c 0 -i 9000000 -b $b | grep band | awk '{ print $2 }' || echo "N/A"
+	./mc-mapping -c 0 -i 90000000 -b $b | grep band | awk '{ print $2 }' || echo "N/A"
+#	./mc-mapping -c 0 -i 100000000 -b $b | grep time | awk '{ print $2 }' || echo "N/A"
 done
 killall -9 mc-mapping
