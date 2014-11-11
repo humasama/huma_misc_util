@@ -69,22 +69,26 @@ void run(uint64_t iter)
 {
 	uint64_t i, j = 0, tmp;
 	int data, global_id, base, in_id, random_id = 0;
-
+	struct timespec seed;
 	for (i = 0; i < iter; i++){
 		//printf("%luth: access list[0x%lx], next time: indices[j=%lu] = 0x%lx\n", i, next, j, indices[j]);
 		data = list[next];	
-		
+		//printf("data = %d\n", data);
+		//data ++;	
 		next = indices[j];
 		//printf("next : %luth:indices[%lu] = 0x%lx\n", i + 1, j, next);
-		
+#if 0 
 		/* shuffle every 16 item */
-		if(j % L3_NUM_WAYS == 15){
+		//if(j % L3_NUM_WAYS == 15){
+		if((j % NUM_ENTRIES) == (NUM_ENTRIES -1)){
 			global_id = j;
-			base = (global_id / L3_NUM_WAYS) * L3_NUM_WAYS;
-			in_id = 15;
+			base = (global_id / NUM_ENTRIES) * NUM_ENTRIES;
+			in_id = NUM_ENTRIES - 1;
 			while(in_id >= 1){
-				random_id = (SEED * random_id + 1013904223 + data * 3) % in_id + base;
-				
+				random_id = (SEED * random_id + 1013904223) % in_id + base;
+				//clock_gettime(CLOCK_REALTIME, &seed);
+				//random_id = seed.tv_nsec % in_id + base;
+
 				tmp = indices[global_id];
 				indices[global_id] = indices[random_id];
 				indices[random_id] = tmp;
@@ -93,8 +97,14 @@ void run(uint64_t iter)
 				global_id --;
 			}
 		}
-
 		j = (j + 1) % NUM_ENTRIES;
+#endif
+#if 1
+		clock_gettime(CLOCK_REALTIME, &seed);
+		data = data < 0 ? data * (-1) : data;
+		j = (seed.tv_nsec + data) % NUM_ENTRIES;
+		//printf("%luth:index[%lu]\n", i, j);
+#endif
 	}
 }
 
@@ -113,14 +123,23 @@ int main(int argc, char* argv[])
 
 	int bank_bit = -1;
 	int xor_bank_bit = -1;
-
+#if 0
 	//init entry_shift: increase
-	entry_shift[0] = 23;
-	entry_shift[1] = 24;
-	entry_shift[2] = 26;
-	entry_shift[3] = 28;
-	entry_shift[4] = 29;
-	//entry_shift[5] = 30;
+	entry_shift[0] = 19;
+	entry_shift[1] = 22;
+	entry_shift[2] = 28;
+	entry_shift[3] = 29;
+	entry_shift[4] = 30;
+	entry_shift[5] = 31;
+	entry_shift[6] = 32;
+	//entry_shift[7] = 30;
+#endif
+#if 1
+	for(i = 0; i < ENTRY_SHIFT_CNT; i ++){
+		entry_shift[i] = 28 + i;	//21
+	}
+#endif
+
 	uint64_t min_interval = ((uint64_t)1 << entry_shift[1]) - ((uint64_t)1 << entry_shift[0]);
 	
 	//printf("min_interval = 0x%lx\n", min_interval);
@@ -212,7 +231,7 @@ int main(int argc, char* argv[])
 
 	/* alloc memory. align to a page boundary */
 	int fd = open("/dev/mem", O_RDWR | O_SYNC);
-	void *addr = (void *) 0x1000000100000000;
+	void *addr = (void *) 0x1000000200000000;
 
 	if (fd < 0){
 		perror("Open failed");
